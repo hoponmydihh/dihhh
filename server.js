@@ -2,7 +2,6 @@ const http = require("http");
 const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 3000;
-
 const rooms = new Map();
 
 const html = `<!DOCTYPE html>
@@ -10,7 +9,7 @@ const html = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Call Room</title>
+  <title>Fast Call Room</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -32,7 +31,10 @@ const html = `<!DOCTYPE html>
       padding: 20px;
       box-shadow: 0 20px 60px rgba(0,0,0,0.35);
     }
-    h1 { margin-top: 0; font-size: 28px; }
+    h1 {
+      margin-top: 0;
+      font-size: 28px;
+    }
     .top {
       display: flex;
       flex-wrap: wrap;
@@ -143,9 +145,9 @@ const html = `<!DOCTYPE html>
   const localVideo = document.getElementById("localVideo");
   const remoteVideo = document.getElementById("remoteVideo");
 
-  let ws;
-  let pc;
-  let localStream;
+  let ws = null;
+  let pc = null;
+  let localStream = null;
   let room = "";
   let micEnabled = true;
   let camEnabled = true;
@@ -161,12 +163,31 @@ const html = `<!DOCTYPE html>
 
   async function startMedia() {
     if (localStream) return localStream;
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: true
-    });
-    localVideo.srcObject = localStream;
-    return localStream;
+
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: true
+      });
+
+      localVideo.srcObject = localStream;
+      setStatus("Mic and camera access granted");
+      return localStream;
+    } catch (err) {
+      console.error(err);
+
+      if (err.name === "NotAllowedError") {
+        alert("You denied microphone/camera access. Please allow both and try again.");
+      } else if (err.name === "NotFoundError") {
+        alert("No microphone or camera was found on this device.");
+      } else if (err.name === "NotReadableError") {
+        alert("Microphone or camera is being used by another app.");
+      } else {
+        alert("Could not access microphone/camera: " + err.message);
+      }
+
+      throw err;
+    }
   }
 
   function createPeer() {
@@ -214,7 +235,6 @@ const html = `<!DOCTYPE html>
     try {
       await startMedia();
     } catch (err) {
-      alert("Camera/mic access failed: " + err.message);
       return;
     }
 
@@ -274,16 +294,22 @@ const html = `<!DOCTYPE html>
 
       if (data.type === "room-full") {
         alert("Room is full. Only 2 users allowed.");
-        cleanup();
+        cleanup(false);
       }
     };
 
     ws.onclose = () => {
-      setStatus("Disconnected from signaling server");
+      if (joined) {
+        setStatus("Disconnected from signaling server");
+      }
+    };
+
+    ws.onerror = () => {
+      setStatus("WebSocket connection error");
     };
   }
 
-  function cleanup() {
+  function cleanup(stopLocal = false) {
     joined = false;
 
     if (ws) {
@@ -297,10 +323,16 @@ const html = `<!DOCTYPE html>
     }
 
     remoteVideo.srcObject = null;
+
+    if (stopLocal && localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+      localStream = null;
+      localVideo.srcObject = null;
+    }
   }
 
   function leaveRoom() {
-    cleanup();
+    cleanup(true);
     setStatus("Left room");
   }
 
@@ -327,9 +359,14 @@ const html = `<!DOCTYPE html>
       alert("Enter room name first");
       return;
     }
+
     const link = location.origin + "/?room=" + encodeURIComponent(roomVal);
-    await navigator.clipboard.writeText(link);
-    setStatus("Copied: " + link);
+    try {
+      await navigator.clipboard.writeText(link);
+      setStatus("Copied: " + link);
+    } catch {
+      alert("Could not copy link");
+    }
   };
 })();
 </script>
