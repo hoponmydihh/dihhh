@@ -31,10 +31,7 @@ const html = `<!DOCTYPE html>
       padding: 20px;
       box-shadow: 0 20px 60px rgba(0,0,0,0.35);
     }
-    h1 {
-      margin-top: 0;
-      font-size: 28px;
-    }
+    h1 { margin-top: 0; font-size: 28px; }
     .top {
       display: flex;
       flex-wrap: wrap;
@@ -77,6 +74,7 @@ const html = `<!DOCTYPE html>
       width: 100%;
       border-radius: 12px;
       background: black;
+      min-height: 180px;
     }
     .label {
       margin: 8px 0 0;
@@ -88,6 +86,7 @@ const html = `<!DOCTYPE html>
       color: #93c5fd;
       font-size: 14px;
       min-height: 20px;
+      white-space: pre-line;
     }
     .controls {
       display: flex;
@@ -119,7 +118,7 @@ const html = `<!DOCTYPE html>
     </div>
 
     <div class="status" id="status">Not connected</div>
-    <div class="small">Open the same room on your friend's browser.</div>
+    <div class="small">If camera is missing, the app will switch to audio-only automatically.</div>
 
     <div class="videos">
       <div class="card">
@@ -152,6 +151,7 @@ const html = `<!DOCTYPE html>
   let micEnabled = true;
   let camEnabled = true;
   let joined = false;
+  let hasCamera = true;
 
   const params = new URLSearchParams(window.location.search);
   const roomFromUrl = params.get("room");
@@ -161,8 +161,21 @@ const html = `<!DOCTYPE html>
     statusEl.textContent = text;
   }
 
+  async function listDevicesInfo() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(d => d.kind === "audioinput").length;
+      const videoInputs = devices.filter(d => d.kind === "videoinput").length;
+      return { audioInputs, videoInputs };
+    } catch {
+      return { audioInputs: 0, videoInputs: 0 };
+    }
+  }
+
   async function startMedia() {
     if (localStream) return localStream;
+
+    const info = await listDevicesInfo();
 
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
@@ -170,23 +183,46 @@ const html = `<!DOCTYPE html>
         video: true
       });
 
+      hasCamera = localStream.getVideoTracks().length > 0;
       localVideo.srcObject = localStream;
       setStatus("Mic and camera access granted");
       return localStream;
     } catch (err) {
-      console.error(err);
+      console.error("Full media error:", err);
 
-      if (err.name === "NotAllowedError") {
-        alert("You denied microphone/camera access. Please allow both and try again.");
-      } else if (err.name === "NotFoundError") {
-        alert("No microphone or camera was found on this device.");
-      } else if (err.name === "NotReadableError") {
-        alert("Microphone or camera is being used by another app.");
-      } else {
-        alert("Could not access microphone/camera: " + err.message);
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false
+        });
+
+        hasCamera = false;
+        localVideo.srcObject = localStream;
+        toggleCamBtn.disabled = true;
+        toggleCamBtn.textContent = "No camera found";
+        setStatus("Camera not found or unavailable. Joined with microphone only.");
+        return localStream;
+      } catch (audioErr) {
+        console.error("Audio-only error:", audioErr);
+
+        if (audioErr.name === "NotAllowedError" || err.name === "NotAllowedError") {
+          alert("You denied microphone/camera permission. Please allow access in the browser.");
+        } else if (audioErr.name === "NotFoundError" || err.name === "NotFoundError") {
+          alert(
+            "No working microphone/camera was found.\\n\\n" +
+            "Detected devices:\\n" +
+            "- Microphones: " + info.audioInputs + "\\n" +
+            "- Cameras: " + info.videoInputs + "\\n\\n" +
+            "Check Windows privacy settings, browser permissions, and whether another app is using the mic."
+          );
+        } else if (audioErr.name === "NotReadableError" || err.name === "NotReadableError") {
+          alert("Your microphone or camera is busy in another app. Close Discord, Teams, Zoom, OBS, browser tabs, etc.");
+        } else {
+          alert("Could not access media devices: " + audioErr.message);
+        }
+
+        throw audioErr;
       }
-
-      throw err;
     }
   }
 
@@ -213,7 +249,7 @@ const html = `<!DOCTYPE html>
     };
 
     pc.onconnectionstatechange = () => {
-      setStatus("Connection: " + pc.connectionState);
+      setStatus("Connection: " + pc.connectionState + (hasCamera ? "" : "\\nAudio-only mode"));
     };
 
     if (localStream) {
@@ -234,7 +270,7 @@ const html = `<!DOCTYPE html>
 
     try {
       await startMedia();
-    } catch (err) {
+    } catch {
       return;
     }
 
@@ -245,7 +281,7 @@ const html = `<!DOCTYPE html>
 
     ws.onopen = () => {
       joined = true;
-      setStatus("Joined room: " + room);
+      setStatus("Joined room: " + room + (hasCamera ? "" : "\\nAudio-only mode"));
       history.replaceState({}, "", "?room=" + encodeURIComponent(room));
       ws.send(JSON.stringify({ type: "join", room }));
     };
@@ -299,9 +335,7 @@ const html = `<!DOCTYPE html>
     };
 
     ws.onclose = () => {
-      if (joined) {
-        setStatus("Disconnected from signaling server");
-      }
+      if (joined) setStatus("Disconnected from signaling server");
     };
 
     ws.onerror = () => {
@@ -328,6 +362,9 @@ const html = `<!DOCTYPE html>
       localStream.getTracks().forEach(track => track.stop());
       localStream = null;
       localVideo.srcObject = null;
+      hasCamera = true;
+      toggleCamBtn.disabled = false;
+      toggleCamBtn.textContent = "Turn off camera";
     }
   }
 
@@ -345,6 +382,8 @@ const html = `<!DOCTYPE html>
 
   toggleCamBtn.onclick = () => {
     if (!localStream) return;
+    if (!hasCamera) return;
+
     camEnabled = !camEnabled;
     localStream.getVideoTracks().forEach(track => track.enabled = camEnabled);
     toggleCamBtn.textContent = camEnabled ? "Turn off camera" : "Turn on camera";
