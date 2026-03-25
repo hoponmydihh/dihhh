@@ -288,9 +288,9 @@ const html = `<!DOCTYPE html>
   let camEnabled = true;
   let hasCamera = true;
 
-  const peerConnections = new Map(); // peerId -> RTCPeerConnection
-  const remoteStreams = new Map();   // peerId -> MediaStream
-  const remoteNames = new Map();     // peerId -> userName
+  const peerConnections = new Map();
+  const remoteStreams = new Map();
+  const remoteNames = new Map();
   let currentUsers = [];
 
   const params = new URLSearchParams(window.location.search);
@@ -484,12 +484,23 @@ const html = `<!DOCTYPE html>
         remoteStreams.set(peerId, stream);
       }
 
-      stream.addTrack(event.track);
+      const alreadyHasTrack = stream.getTracks().some(t => t.id === event.track.id);
+      if (!alreadyHasTrack) {
+        stream.addTrack(event.track);
+      }
 
       const video = document.getElementById("video-" + peerId);
       if (video) {
         video.srcObject = stream;
+        video.autoplay = true;
+        video.playsInline = true;
+        video.muted = false;
+        video.play().catch((err) => {
+          console.log("Autoplay blocked:", err);
+        });
       }
+
+      addLog("Receiving " + event.track.kind + " from " + (remoteNames.get(peerId) || "User"));
     };
 
     pc.onconnectionstatechange = () => {
@@ -627,7 +638,8 @@ const html = `<!DOCTYPE html>
 
     for (const user of otherUsers) {
       if (!peerConnections.has(user.id)) {
-        createPeerConnection(user.id, user.name, true);
+        const shouldInitiate = myId > user.id;
+        createPeerConnection(user.id, user.name, shouldInitiate);
       }
     }
 
